@@ -1456,6 +1456,7 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
     zset *dstzset;
     zskiplistNode *znode;
     int touched = 0;
+    unsigned int inplace = 0;
 
     /* expect setnum input keys to be given */
     if ((getLongFromObjectOrReply(c, c->argv[2], &setnum, NULL) != REDIS_OK))
@@ -1483,7 +1484,12 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
                 addReply(c,shared.wrongtypeerr);
                 return;
             }
-
+            if (c->argv[j] == dstkey && obj->type == REDIS_ZSET) { //and it's a skiplist
+                /* destination set should be updated in-place */
+                inplace = 1;
+                dstobj = obj;
+                dstset = obj->ptr;
+            }
             src[i].subject = obj;
             src[i].type = obj->type;
             src[i].encoding = obj->encoding;
@@ -1539,8 +1545,10 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
      * algorithm's performance */
     qsort(src,setnum,sizeof(zsetopsrc),zuiCompareByCardinality);
 
-    dstobj = createZsetObject();
-    dstzset = dstobj->ptr;
+    if(!inplace) {
+        dstobj = createZsetObject();
+        dstzset = dstobj->ptr;
+    }
     memset(&zval, 0, sizeof(zval));
 
     if (op == REDIS_OP_INTER) {
@@ -1580,9 +1588,13 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
                         if (sdslen(tmp->ptr) > maxelelen)
                             maxelelen = sdslen(tmp->ptr);
                 }
+                else if(inplace) {
+                    //delete from dstkey -- is this safe?
+                }
             }
         }
     } else if (op == REDIS_OP_UNION) {
+        // TODO: INPLACE hack must have removed  destkey from src by now.
         for (i = 0; i < setnum; i++) {
             if (zuiLength(&src[i]) == 0)
                 continue;
