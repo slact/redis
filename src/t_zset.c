@@ -1445,7 +1445,7 @@ inline static void zunionInterAggregate(double *target, double val, int aggregat
 }
 
 void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
-    int i, j;
+    int i, j, dstarg;
     long setnum;
     int aggregate = REDIS_AGGR_SUM;
     zsetopsrc *src;
@@ -1488,7 +1488,8 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
                 /* destination set should be updated in-place */
                 inplace = 1;
                 dstobj = obj;
-                dstset = obj->ptr;
+                dstzset = obj->ptr;
+                dstarg = i;
             }
             src[i].subject = obj;
             src[i].type = obj->type;
@@ -1589,21 +1590,26 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
                             maxelelen = sdslen(tmp->ptr);
                 }
                 else if(inplace) {
-                    //delete from dstkey -- is this safe?
+                    //delete from destination as it's being traversed -- is this safe?
+                    // ...probably not. let's find out!
+                    zslDelete(dstzset->zsl, score, tmp);
                 }
             }
         }
     } else if (op == REDIS_OP_UNION) {
-        // TODO: INPLACE hack must have removed  destkey from src by now.
+        // TODO: INPLACE hack must have removed destkey from src by now.
         for (i = 0; i < setnum; i++) {
+            if (i == dstarg)
+                continue;
             if (zuiLength(&src[i]) == 0)
                 continue;
 
             while (zuiNext(&src[i],&zval)) {
                 double score, value;
 
+                tmp = dictFind(dstzset->dict,zuiObjectFromValue(&zval));
                 /* Skip key when already processed */
-                if (dictFind(dstzset->dict,zuiObjectFromValue(&zval)) != NULL)
+                if (!inplace && tmp != NULL)
                     continue;
 
                 /* Initialize score */
@@ -1624,12 +1630,17 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
                     }
                 }
 
-                tmp = zuiObjectFromValue(&zval);
+                if(inplace && tmp) {
+                    //delete first, to be re-inserted
+                    zslDelete(zs->zsl,tmp.score,tmp);
+                    zunionInterAggregate(&score,tmp.score*src[dstarg].weight,aggregate);
+                } else {
+                    tmp = zuiObjectFromValue(&zval);
+                }
                 znode = zslInsert(dstzset->zsl,score,tmp);
                 incrRefCount(zval.ele); /* added to skiplist */
                 dictAdd(dstzset->dict,tmp,&znode->score);
                 incrRefCount(zval.ele); /* added to dictionary */
-
                 if (tmp->encoding == REDIS_ENCODING_RAW)
                     if (sdslen(tmp->ptr) > maxelelen)
                         maxelelen = sdslen(tmp->ptr);
@@ -1642,7 +1653,7 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
     for (i = 0; i < setnum; i++)
         zuiClearIterator(&src[i]);
 
-    if (dbDelete(c->db,dstkey)) {
+    if (inplace || dbDelete(c->db,dstkey)) {
         signalModifiedKey(c->db,dstkey);
         touched = 1;
         server.dirty++;
@@ -1658,7 +1669,8 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
         if (!touched) signalModifiedKey(c->db,dstkey);
         server.dirty++;
     } else {
-        decrRefCount(dstobj);
+        if(!inplace)
+            decrRefCount(dstobj);
         addReply(c,shared.czero);
     }
     zfree(src);
