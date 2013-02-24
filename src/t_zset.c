@@ -1492,103 +1492,22 @@ inline static void zunionInterAggregate(double *target, double val, int aggregat
     }
 }
 
-void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
+zset* zunionInterInplaceAlgorithm(redisClient *c, robj *dstkey, int op, long setnum, zsetopsrc *src, int aggregate, int dstindex) {
+  int i, j;
+  robj *dstobj = src[dstindex].subject;
+  
+  
+  
+}
+
+zset* zunionInterGenericAlgorithm(redisClient *c, robj *dstkey, int op, long setnum, zsetopsrc *src, int aggregate) {
     int i, j;
-    long setnum;
-    int aggregate = REDIS_AGGR_SUM;
-    zsetopsrc *src;
-    zsetopval zval;
+    robj *dstobj = createZsetObject();
+    zset *dstzset = dstobj->ptr;
     robj *tmp;
-    unsigned int maxelelen = 0;
-    robj *dstobj;
-    zset *dstzset;
+    zsetopval zval;
     zskiplistNode *znode;
-    int touched = 0;
-
-    /* expect setnum input keys to be given */
-    if ((getLongFromObjectOrReply(c, c->argv[2], &setnum, NULL) != REDIS_OK))
-        return;
-
-    if (setnum < 1) {
-        addReplyError(c,
-            "at least 1 input key is needed for ZUNIONSTORE/ZINTERSTORE");
-        return;
-    }
-
-    /* test if the expected number of keys would overflow */
-    if (setnum > c->argc-3) {
-        addReply(c,shared.syntaxerr);
-        return;
-    }
-
-    /* read keys to be used for input */
-    src = zcalloc(sizeof(zsetopsrc) * setnum);
-    for (i = 0, j = 3; i < setnum; i++, j++) {
-        robj *obj = lookupKeyWrite(c->db,c->argv[j]);
-        if (obj != NULL) {
-            if (obj->type != REDIS_ZSET && obj->type != REDIS_SET) {
-                zfree(src);
-                addReply(c,shared.wrongtypeerr);
-                return;
-            }
-
-            src[i].subject = obj;
-            src[i].type = obj->type;
-            src[i].encoding = obj->encoding;
-        } else {
-            src[i].subject = NULL;
-        }
-
-        /* Default all weights to 1. */
-        src[i].weight = 1.0;
-    }
-
-    /* parse optional extra arguments */
-    if (j < c->argc) {
-        int remaining = c->argc - j;
-
-        while (remaining) {
-            if (remaining >= (setnum + 1) && !strcasecmp(c->argv[j]->ptr,"weights")) {
-                j++; remaining--;
-                for (i = 0; i < setnum; i++, j++, remaining--) {
-                    if (getDoubleFromObjectOrReply(c,c->argv[j],&src[i].weight,
-                            "weight value is not a float") != REDIS_OK)
-                    {
-                        zfree(src);
-                        return;
-                    }
-                }
-            } else if (remaining >= 2 && !strcasecmp(c->argv[j]->ptr,"aggregate")) {
-                j++; remaining--;
-                if (!strcasecmp(c->argv[j]->ptr,"sum")) {
-                    aggregate = REDIS_AGGR_SUM;
-                } else if (!strcasecmp(c->argv[j]->ptr,"min")) {
-                    aggregate = REDIS_AGGR_MIN;
-                } else if (!strcasecmp(c->argv[j]->ptr,"max")) {
-                    aggregate = REDIS_AGGR_MAX;
-                } else {
-                    zfree(src);
-                    addReply(c,shared.syntaxerr);
-                    return;
-                }
-                j++; remaining--;
-            } else {
-                zfree(src);
-                addReply(c,shared.syntaxerr);
-                return;
-            }
-        }
-    }
-
-    for (i = 0; i < setnum; i++)
-        zuiInitIterator(&src[i]);
-
-    /* sort sets from the smallest to largest, this will improve our
-     * algorithm's performance */
-    qsort(src,setnum,sizeof(zsetopsrc),zuiCompareByCardinality);
-
-    dstobj = createZsetObject();
-    dstzset = dstobj->ptr;
+    unsigned int maxelelen = 0;
     memset(&zval, 0, sizeof(zval));
 
     if (op == REDIS_OP_INTER) {
@@ -1674,11 +1593,119 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
     } else {
         redisPanic("Unknown operator");
     }
+    return dstzset;
+}
+
+void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
+    int i, j;
+    long setnum;
+    int aggregate = REDIS_AGGR_SUM;
+    zsetopsrc *src;
+    zsetopval zval;
+    robj *dstobj;
+    zset *dstzset;
+    int touched = 0;
+    unsigned int maxelelen = 0;
+    int inplace = 0, inplaceindex;
+
+    /* expect setnum input keys to be given */
+    if ((getLongFromObjectOrReply(c, c->argv[2], &setnum, NULL) != REDIS_OK))
+        return;
+
+    if (setnum < 1) {
+        addReplyError(c,
+            "at least 1 input key is needed for ZUNIONSTORE/ZINTERSTORE");
+        return;
+    }
+
+    /* test if the expected number of keys would overflow */
+    if (setnum > c->argc-3) {
+        addReply(c,shared.syntaxerr);
+        return;
+    }
+
+    /* read keys to be used for input */
+    src = zcalloc(sizeof(zsetopsrc) * setnum);
+    for (i = 0, j = 3; i < setnum; j++) {
+        robj *obj = lookupKeyWrite(c->db,c->argv[j]);
+        if (obj != NULL) {
+            if (obj->type != REDIS_ZSET && obj->type != REDIS_SET) {
+                zfree(src);
+                addReply(c,shared.wrongtypeerr);
+                return;
+            }
+            if (c->argv[j] == dstkey && obj->type == REDIS_ZSET) { //and it's a skiplist
+                /* destination set should be updated in-place */
+                inplace = i;
+            }
+            else {
+                src[i].subject = obj;
+                src[i].type = obj->type;
+                src[i].encoding = obj->encoding;
+                i++;
+            }
+        } else {
+            src[i].subject = NULL;
+        }
+
+        /* Default all weights to 1. */
+        src[i].weight = 1.0;
+    }
+
+    /* parse optional extra arguments */
+    if (j < c->argc) {
+        int remaining = c->argc - j;
+
+        while (remaining) {
+            if (remaining >= (setnum + 1) && !strcasecmp(c->argv[j]->ptr,"weights")) {
+                j++; remaining--;
+                for (i = 0; i < setnum; i++, j++, remaining--) {
+                    if (getDoubleFromObjectOrReply(c,c->argv[j],&src[i].weight,
+                            "weight value is not a float") != REDIS_OK)
+                    {
+                        zfree(src);
+                        return;
+                    }
+                }
+            } else if (remaining >= 2 && !strcasecmp(c->argv[j]->ptr,"aggregate")) {
+                j++; remaining--;
+                if (!strcasecmp(c->argv[j]->ptr,"sum")) {
+                    aggregate = REDIS_AGGR_SUM;
+                } else if (!strcasecmp(c->argv[j]->ptr,"min")) {
+                    aggregate = REDIS_AGGR_MIN;
+                } else if (!strcasecmp(c->argv[j]->ptr,"max")) {
+                    aggregate = REDIS_AGGR_MAX;
+                } else {
+                    zfree(src);
+                    addReply(c,shared.syntaxerr);
+                    return;
+                }
+                j++; remaining--;
+            } else {
+                zfree(src);
+                addReply(c,shared.syntaxerr);
+                return;
+            }
+        }
+    }
+
+    for (i = 0; i < setnum; i++)
+        zuiInitIterator(&src[i]);
+
+    /* sort sets from the smallest to largest, this will improve our
+     * algorithm's performance */
+    qsort(src,setnum,sizeof(zsetopsrc),zuiCompareByCardinality);
+
+    if(inplace) {
+        dstobj = zunionInterInplaceAlgorithm(c, dstkey, op, setnum, src, aggregate, inplaceindex);
+    } else {
+        dstobj = zunionInterGenericAlgorithm(c, dstkey, op, setnum, src, aggregate);
+    }
 
     for (i = 0; i < setnum; i++)
         zuiClearIterator(&src[i]);
 
-    if (dbDelete(c->db,dstkey)) {
+    if (!inplace && dbDelete(c->db,dstkey)) {
         signalModifiedKey(c->db,dstkey);
         touched = 1;
         server.dirty++;
