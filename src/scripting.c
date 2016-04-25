@@ -31,6 +31,7 @@
 #include "sha1.h"
 #include "rand.h"
 #include "cluster.h"
+#include "luascripts.h"
 
 #include <lua.h>
 #include <lauxlib.h>
@@ -845,37 +846,9 @@ void luaRemoveUnsupportedFunctions(lua_State *lua) {
  * It should be the last to be called in the scripting engine initialization
  * sequence, because it may interact with creation of globals. */
 void scriptingEnableGlobalsProtection(lua_State *lua) {
-    char *s[32];
-    sds code = sdsempty();
-    int j = 0;
 
-    /* strict.lua from: http://metalua.luaforge.net/src/lib/strict.lua.html.
-     * Modified to be adapted to Redis. */
-    s[j++]="local dbg=debug\n";
-    s[j++]="local mt = {}\n";
-    s[j++]="setmetatable(_G, mt)\n";
-    s[j++]="mt.__newindex = function (t, n, v)\n";
-    s[j++]="  if dbg.getinfo(2) then\n";
-    s[j++]="    local w = dbg.getinfo(2, \"S\").what\n";
-    s[j++]="    if w ~= \"main\" and w ~= \"C\" then\n";
-    s[j++]="      error(\"Script attempted to create global variable '\"..tostring(n)..\"'\", 2)\n";
-    s[j++]="    end\n";
-    s[j++]="  end\n";
-    s[j++]="  rawset(t, n, v)\n";
-    s[j++]="end\n";
-    s[j++]="mt.__index = function (t, n)\n";
-    s[j++]="  if dbg.getinfo(2) and dbg.getinfo(2, \"S\").what ~= \"C\" then\n";
-    s[j++]="    error(\"Script attempted to access unexisting global variable '\"..tostring(n)..\"'\", 2)\n";
-    s[j++]="  end\n";
-    s[j++]="  return rawget(t, n)\n";
-    s[j++]="end\n";
-    s[j++]="debug = nil\n";
-    s[j++]=NULL;
-
-    for (j = 0; s[j] != NULL; j++) code = sdscatlen(code,s[j],strlen(s[j]));
-    luaL_loadbuffer(lua,code,sdslen(code),"@enable_strict_lua");
+    luaL_loadbuffer(lua, luaScript.enable_strict, strlen(luaScript.enable_strict),"@enable_strict_lua");
     lua_pcall(lua,0,0,0);
-    sdsfree(code);
 }
 
 /* Initialize the scripting environment.
@@ -1009,36 +982,16 @@ void scriptingInit(int setup) {
 
     /* Add a helper function that we use to sort the multi bulk output of non
      * deterministic commands, when containing 'false' elements. */
-    {
-        char *compare_func =    "function __redis__compare_helper(a,b)\n"
-                                "  if a == false then a = '' end\n"
-                                "  if b == false then b = '' end\n"
-                                "  return a<b\n"
-                                "end\n";
-        luaL_loadbuffer(lua,compare_func,strlen(compare_func),"@cmp_func_def");
-        lua_pcall(lua,0,0,0);
-    }
+    luaL_loadbuffer(lua,luaScript.compare_func,strlen(luaScript.compare_func),"@cmp_func_def");
+    lua_pcall(lua,0,0,0);
+    
 
     /* Add a helper function we use for pcall error reporting.
      * Note that when the error is in the C function we want to report the
      * information about the caller, that's what makes sense from the point
      * of view of the user debugging a script. */
-    {
-        char *errh_func =       "local dbg = debug\n"
-                                "function __redis__err__handler(err)\n"
-                                "  local i = dbg.getinfo(2,'nSl')\n"
-                                "  if i and i.what == 'C' then\n"
-                                "    i = dbg.getinfo(3,'nSl')\n"
-                                "  end\n"
-                                "  if i then\n"
-                                "    return i.source .. ':' .. i.currentline .. ': ' .. err\n"
-                                "  else\n"
-                                "    return err\n"
-                                "  end\n"
-                                "end\n";
-        luaL_loadbuffer(lua,errh_func,strlen(errh_func),"@err_handler_def");
-        lua_pcall(lua,0,0,0);
-    }
+    luaL_loadbuffer(lua,luaScript.error_handler_func,strlen(luaScript.error_handler_func),"@err_handler_def");
+    lua_pcall(lua,0,0,0);
 
     /* Create the (non connected) client that we use to execute Redis commands
      * inside the Lua interpreter.
