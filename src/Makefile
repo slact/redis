@@ -137,7 +137,7 @@ all: $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCH
 # Deps (use make dep to generate this)
 include Makefile.dep
 
-luascripts.h:
+luascripts.h: scripts/*.lua
 	hsss --format split \
 		--no-names  \
 		--no-hashes \
@@ -147,7 +147,7 @@ luascripts.h:
 		--scripts luaScript \
 		scripts/*.lua > luascripts.h
 
-dep:
+dep: luascripts.h
 	$(REDIS_CC) -MM *.c > Makefile.dep
 
 .PHONY: dep
@@ -181,7 +181,7 @@ ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
 endif
 
 # redis-server
-$(REDIS_SERVER_NAME): luascripts.h $(REDIS_SERVER_OBJ)
+$(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ)
 	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a $(REDIS_GEOHASH_OBJ) $(FINAL_LIBS)
 
 # redis-sentinel
@@ -212,7 +212,6 @@ $(REDIS_CHECK_AOF_NAME): $(REDIS_CHECK_AOF_OBJ)
 
 clean:
 	rm -rf $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) *.o *.gcda *.gcno *.gcov redis.info lcov-html
-	rm -f luascripts.h
 .PHONY: clean
 
 distclean: clean
