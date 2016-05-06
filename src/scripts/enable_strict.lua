@@ -14,7 +14,7 @@ mt.__newindex = function (t, n, v)
 end
 mt.__index = function (t, n)
   if dbg.getinfo(2) and dbg.getinfo(2, "S").what ~= "C" then
-    error("Script attempted to access unexisting global variable '"..tostring(n).."'", 2)
+    error("Script attempted to access nonexistent global variable '"..tostring(n).."'", 2)
   end
   return rawget(t, n)
 end

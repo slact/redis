@@ -45,7 +45,7 @@ static redisLuaScripts luaScript = {
   "end\n"
   "mt.__index = function (t, n)\n"
   "  if dbg.getinfo(2) and dbg.getinfo(2, \"S\").what ~= \"C\" then\n"
-  "    error(\"Script attempted to access unexisting global variable '\"..tostring(n)..\"'\", 2)\n"
+  "    error(\"Script attempted to access nonexistent global variable '\"..tostring(n)..\"'\", 2)\n"
   "  end\n"
   "  return rawget(t, n)\n"
   "end\n"
