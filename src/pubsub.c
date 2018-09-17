@@ -316,7 +316,7 @@ void punsubscribeCommand(client *c) {
 
 void publishCommand(client *c) {
     int receivers = pubsubPublishMessage(c->argv[1],c->argv[2]);
-    if (server.cluster_enabled)
+    if (server.cluster_enabled && server.cluster_pubsub_propagate)
         clusterPropagatePublish(c->argv[1],c->argv[2]);
     else
         forceCommandPropagation(c,PROPAGATE_REPL);
